@@ -7,7 +7,7 @@
     // The IP address will be dependent on your local network:
     byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
     //my ip
-    IPAddress ip(192, 168, 1, 177);
+    IPAddress ip(192, 168, 1, 105);
     // Enter the IP address of the server you're connecting to:
     IPAddress server(192, 168, 1, 100);
     // Initialize the Ethernet client library
@@ -131,17 +131,21 @@
       #define enable                   1
       #define disable                  0
       
+      //EEPROM
+      #define readPass                 0
+      #define readSystemStatus         1
+      #define readZones                2
+
          
       /*password*/
-      byte passwordAddress[5]={'0','0','0','0'};
-      byte password[5]={'0','0','0','0'};
-      
+      byte password[4]={0,0,0,0};
+     
       
    /**********************************************************************************/  
      /*systemStatus []={systemStatusCell->[systemDisarmed=0, systemArmed=1,systemStayArmed=2], 
      systemSubStatusCell->[in_normal=0,in_entry_delay=1,in_alarm=2], 
      SystemRunningNowCell->[systemAlarmNormal=0,systemAlarmWait=1,systemCloseAlarm=2,systemEntryWait=3,openedZones=4]};*/
-    byte systemStatus []={2,0,0};
+    byte systemStatus []={0,0,0};
    
     /*PORTC + PORTA zone attributes
     zone= {zoneAttributeCell->[0=zoneInactive , 1=zoneDelay, 2=zoneInternal, 3=zoneInstant], 
@@ -205,6 +209,7 @@ void setup(){
      // start the Ethernet connection:
      Ethernet.begin(mac, ip, gateway); 
      // Check for Ethernet hardware present
+     Serial.println(ip);
   if (Ethernet.hardwareStatus() == EthernetNoHardware) {
     Serial.println("Ethernet hardware was not found.");
       delay(1); // do nothing, no point running without Ethernet hardware    
@@ -219,21 +224,42 @@ void setup(){
   Serial.println("connecting...");
 
   // if you get a connection, report back via serial:
-  if (client.connect(server, 2323)) {
+  if (client.connect(server, 23)) {
     Serial.println("connected");
   } else {
     // if you didn't get a connection to the server:
     Serial.println("connection failed");
-  }    
+  }
+  
+  // writeToEeprom(readPass);
+  // delay(50);
+  // writeToEeprom(readSystemStatus);
+  // delay(50);
+  // writeToEeprom(readZones);
+
+  //init values reads stored status values from EEPROM
+  readsFromEeprom(readPass);
+  delay(50);
+  readsFromEeprom(readSystemStatus);
+  delay(50);
+  //readsFromEeprom(readZones); 
   /* Enable the watchdog with a timeout of 2 seconds */
   wdt_enable(WDTO_2S);  
   }
 /**********************************************************************************/  
 //writes to EEPROM
-  byte writeToEeprom(int addr, byte val){
+  void writeToEeprom(byte selector){
     /*Write the value to the appropriate byte of the EEPROM.
     these values will remain there when the board is turned off.*/
-    EEPROM.write(addr, val);
+    //EEPROM.write(addr, val);
+    if(selector==readPass){EEPROM.put(0x00, password);}
+    if(selector==readSystemStatus){EEPROM.put(0xA0, systemStatus);}
+    if(selector==readZones){EEPROM.put(0xC0, zones);}}
+  //reads from EEPROM
+ void readsFromEeprom(byte selector){
+    if(selector==readPass){EEPROM.get(0x00, password);}
+    if(selector==readSystemStatus){EEPROM.get(0xA0, systemStatus);}
+    if(selector==readZones){EEPROM.get(0xC0, zones);}
   }
 //scan inputs and load the arrays
   void scanZones(){
@@ -249,8 +275,10 @@ void setup(){
   int zoneBypass(int zoneName, int BypassUnBypass){        
           zones[zoneName][zoneBypassCell]=BypassUnBypass;
           if(BypassUnBypass==enable){
+            writeToEeprom(readZones);
               return 1;
             }else if(BypassUnBypass==disable){
+              writeToEeprom(readZones);
               return 0; 
              }
              delay(5);}   
@@ -340,7 +368,8 @@ void setup(){
             if(zones[i][zonePinCell]==zoneBypassed){
                 zones[i][zonePinCell]=zoneUsed;
               }
-          }        
+          }  
+          writeToEeprom(readSystemStatus);      
       }
 //system arms in stay mode
   void armInStay(){      
@@ -352,7 +381,8 @@ void setup(){
           }
        if(countOpenZones==0){
             systemStatus[systemStatusCell]=systemStayArmed;            
-       }}
+       }
+       writeToEeprom(readSystemStatus);}
 //arms system in full mode  
   void armInFull(){
         int countOpenZones=0;        
@@ -365,6 +395,7 @@ void setup(){
             systemStatus[systemStatusCell]=systemArmed;                  
             
          }
+         writeToEeprom(readSystemStatus);
       }
 //communicate with telnet server 
 byte receiceDataFromServer(){
@@ -372,6 +403,7 @@ byte receiceDataFromServer(){
   // from the server, read them and print them:
     if (client.available()) {
       byte receiveData = client.read();
+      Serial.println(receiveData);
       return receiveData;      
     }else{
       return disable;
@@ -421,15 +453,31 @@ void loop(){
   byte receivedData; 
   wdt_reset();
   scanZones();
+
+  //readsFromEeprom(readPass);
+  // Serial.println("pass");
+  // for(int i=0;i<sizeof(password); i++){
+  //   Serial.println(password[i]);
+  // }
+  // Serial.println("systemStatus");
+  // for(int i=0;i<sizeof(systemStatus); i++){
+  //   Serial.println(systemStatus[i]);
+  //  }
+  //  Serial.println("zones");
+  //  for(int i=0;i<16; i++){
+  //  for(int j=0;j<5; j++){
+  //   Serial.println(zones[i][j]);
+  //  }}
   //receivedData=receiceDataFromServer();
   //sendDataToServer(systemStatus);
 //Serial.println(systemStatus[systemSubStatusCell]);
 delay(1400);
+receiceDataFromServer();
   switch(systemStatus[systemSubStatusCell]){    
     case systemNormal:  
       switch(systemStatus[systemStatusCell]){
         case systemDisarmed:   
-        Serial.println("systemDisarmed");                                         
+        //Serial.println("systemDisarmed");                                         
         break;             
         
         case systemArmed:
