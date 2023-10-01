@@ -2,21 +2,27 @@
     #include <Ethernet.h>
     #include <SPI.h>
     #include <EEPROM.h>
+    #include <string.h>
 
     // Enter a MAC address and IP address for your controller below.
     // The IP address will be dependent on your local network:
     byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
     //my ip
-    IPAddress ip(192, 168, 1, 105);
+    IPAddress ip(192, 168, 1, 20);
     // Enter the IP address of the server you're connecting to:
-    IPAddress server(192, 168, 1, 100);
+    IPAddress server(192, 168, 1, 9);
     // Initialize the Ethernet client library
     // with the IP address and port of the server
     // that you want to connect to (port 23 is default for telnet;
     // if you're using Processing's ChatServer, use port 10002):
     IPAddress gateway(192, 168, 1, 1);
     EthernetClient client;
-      
+    char receiveData[50]="";
+
+    //Time variables
+    unsigned long currentTime;
+    unsigned long serverReconnectTime; 
+
     /*system_status*/      
       #define systemStatusCell         0
       #define systemDisarmed           0
@@ -92,7 +98,9 @@
       #define zoneNumberCell             4
 
       /*output attributes*/    
-      #define outputAttributeCell           1        
+      #define outputAttributeCell           1     
+      #define outputStatusCell              2
+      #define maxOutputs                    11
       #define outputSirenPin                39
       #define outputSiren2Pin               40
       #define PGM1Pin                       41
@@ -173,6 +181,8 @@
     /**********************************************************************************/  
 void setup(){    
   wdt_disable();  /* Disable the watchdog and wait for more than 2 seconds */ 
+    currentTime = millis();
+    serverReconnectTime = currentTime;
       //Port C initialize as input for zones        
      for (int pin = 30; pin <= 37; pin++) {
           pinMode(pin, INPUT);
@@ -224,7 +234,7 @@ void setup(){
   Serial.println("connecting...");
 
   // if you get a connection, report back via serial:
-  if (client.connect(server, 23)) {
+  if (client.connect(server, 1500)) {
     Serial.println("connected");
   } else {
     // if you didn't get a connection to the server:
@@ -248,13 +258,13 @@ void setup(){
   }
 /**********************************************************************************/  
 //writes to EEPROM
-  void writeToEeprom(byte selector){
-    /*Write the value to the appropriate byte of the EEPROM.
-    these values will remain there when the board is turned off.*/
-    //EEPROM.write(addr, val);
-    if(selector==readPass){EEPROM.put(0x00, password);}
-    if(selector==readSystemStatus){EEPROM.put(0xA0, systemStatus);}
-    if(selector==readZones){EEPROM.put(0xC0, zones);}}
+void writeToEeprom(byte selector){
+   /*Write the value to the appropriate byte of the EEPROM.
+   these values will remain there when the board is turned off.*/
+   //EEPROM.write(addr, val);
+  if(selector==readPass){EEPROM.put(0x00, password);}
+  if(selector==readSystemStatus){EEPROM.put(0xA0, systemStatus);}
+  if(selector==readZones){EEPROM.put(0xC0, zones);}}
   //reads from EEPROM
  void readsFromEeprom(byte selector){
     if(selector==readPass){EEPROM.get(0x00, password);}
@@ -270,28 +280,30 @@ void setup(){
             zones[i][zoneStatusCell]=0;
           }          
         delay(5);
-    }}
+    }}   
 //bypass unbypass a zone
-  int zoneBypass(int zoneName, int BypassUnBypass){        
+  int zoneBypass(int zoneName, int BypassUnBypass){
           zones[zoneName][zoneBypassCell]=BypassUnBypass;
           if(BypassUnBypass==enable){
             writeToEeprom(readZones);
+            sendDataToServer("zoneBypased");
               return 1;
             }else if(BypassUnBypass==disable){
               writeToEeprom(readZones);
+              sendDataToServer("zoneUnbypased");
               return 0; 
              }
              delay(5);}   
 //set an output
-  int setOutput(int outputName, int setUnset){        
+  int setOutput(int outputName, int setUnset){
           outputs[outputName][outputAttributeCell]=setUnset;
           if(setUnset==enable){
               return 1;
             }else if(setUnset==disable){
-              return 0; 
+              return 0;
              }
              delay(5);
-        }  
+      }
 //scan when is stayArmed
   void ScanStayArmed(){
          
@@ -369,7 +381,8 @@ void setup(){
                 zones[i][zonePinCell]=zoneUsed;
               }
           }  
-          writeToEeprom(readSystemStatus);      
+          writeToEeprom(readSystemStatus); 
+          sendDataToServer("systemDisarmed");     
       }
 //system arms in stay mode
   void armInStay(){      
@@ -380,7 +393,8 @@ void setup(){
               }
           }
        if(countOpenZones==0){
-            systemStatus[systemStatusCell]=systemStayArmed;            
+            systemStatus[systemStatusCell]=systemStayArmed; 
+            sendDataToServer("systemStayArm");           
        }
        writeToEeprom(readSystemStatus);}
 //arms system in full mode  
@@ -393,24 +407,33 @@ void setup(){
           }          
         if(countOpenZones==0){
             systemStatus[systemStatusCell]=systemArmed;                  
-            
-         }
-         writeToEeprom(readSystemStatus);
+            sendDataToServer("systemArmed");
+            writeToEeprom(readSystemStatus);
+         }else{sendDataToServer("openedZones");}
+        
       }
+
 //communicate with telnet server 
-byte receiceDataFromServer(){
+char* receiveDataFromServer(){
   // if there are incoming bytes available
   // from the server, read them and print them:
-    if (client.available()) {
-      byte receiveData = client.read();
-      Serial.println(receiveData);
-      return receiveData;      
+  byte k=0;
+  memset(receiveData, 0, sizeof receiveData);
+    if(client.available()) {
+      for(int i=0; i<client.available();){
+        wdt_reset();
+        receiveData[k] = client.read();
+        k++;
+      }
+      //client.flush();
+      return receiveData;   
     }else{
-      return disable;
+      return receiveData;
     }
   }
-
-byte sendDataToServer(byte sendData[]){
+//send data to server
+void sendDataToServer(byte sendData[]){
+  wdt_reset();
   // read them and send them out the socket if it's open:
     if (client.connected()) {
       //client.print(sendData);
@@ -420,14 +443,12 @@ byte sendDataToServer(byte sendData[]){
        client.write(sendData, sizeof(sendData));
     }
   }
-
-
   void ethernetCommunicationOriginal(){
     // if there are incoming bytes available
   // from the server, read them and print them:
   if (client.available()) {
     char receiveData = client.read();
-    Serial.print(receiveData);
+    Serial.print( receiveData);
   }
   // as long as there are bytes in the serial queue,
   // read them and send them out the socket if it's open:
@@ -447,16 +468,79 @@ byte sendDataToServer(byte sendData[]){
       delay(1);
     }
   }}
+//try to reconnect with server
+void serverReconect(){
+        // start the Ethernet connection:
+      Ethernet.begin(mac, ip, gateway); 
+      // Check for Ethernet hardware present
+      Serial.println(ip);
+    if (Ethernet.hardwareStatus() == EthernetNoHardware) {
+      Serial.println("Ethernet hardware was not found.");
+        delay(1); // do nothing, no point running without Ethernet hardware    
+    }
+    while (Ethernet.linkStatus() == LinkOFF) {
+      Serial.println("Ethernet cable is not connected.");
+      delay(500);
+    }
 
+    // give the Ethernet shield a second to initialize:
+    delay(1000);
+    Serial.println("connecting...");
+
+    // if you get a connection, report back via serial:
+    if (client.connect(server, 1500)) {
+      Serial.println("connected");
+    } else {
+      // if you didn't get a connection to the server:
+      Serial.println("connection failed");
+    }
+  }
+
+//get communds from server
+void communicateServer(){
+    wdt_reset();
+    char* receivedSerData=receiveDataFromServer();
+    String receivedServerData=String(receivedSerData);
+
+    if(receivedServerData=="armFull"){
+      armInFull();
+    }else if(receivedServerData=="disarm"){
+      systemDisarm();
+    }else if(receivedServerData=="armStay"){
+      armInStay();
+    }else if(receivedServerData=="bypassZone"){
+      zoneBypass(2, 2);
+    } else if(receivedServerData=="status"){
+      systemStatusScan();
+    }
+  }
+//sends system status to server
+void systemStatusScan(){
+      byte tempZones[maxZones]={};
+      byte tempOutputs[maxOutputs]={};
+
+      sendDataToServer(systemStatus);
+      delay(50);
+      //send zone status
+      for(int i=0;i<=maxZones;i++){                            
+        tempZones[i]=zones[i][zoneStatusCell];           
+      }  
+      sendDataToServer(tempZones);      
+      delay(50); 
+      //send outputs status
+      for(int k=0;k<=maxOutputs;k++){                            
+        tempOutputs[k]=outputs[k][outputStatusCell];           
+      }
+      sendDataToServer(tempOutputs);
+    }
 /**********************************************************************************/  
 void loop(){    
-  byte receivedData; 
   wdt_reset();
   scanZones();
-
+/*
   //readsFromEeprom(readPass);
-  // Serial.println("pass");
-  // for(int i=0;i<sizeof(password); i++){
+  //Serial.println("pass");
+   //for(int i=0;i<sizeof(password); i++){
   //   Serial.println(password[i]);
   // }
   // Serial.println("systemStatus");
@@ -469,10 +553,28 @@ void loop(){
   //   Serial.println(zones[i][j]);
   //  }}
   //receivedData=receiceDataFromServer();
-  //sendDataToServer(systemStatus);
-//Serial.println(systemStatus[systemSubStatusCell]);
+  //sendDataToServer(systemStatus);*/
+
+//sendDataToServer("ar");
 delay(1400);
-receiceDataFromServer();
+wdt_reset();
+delay(1400);
+wdt_reset();
+delay(1400);
+
+//reconnect to server with repetition delay
+if (!client.connected()){
+  currentTime = millis();
+  if(currentTime >= (serverReconnectTime + 50000)){  
+    Serial.println("Server Try To Reconect");
+    serverReconect();
+    serverReconnectTime = currentTime;  // Updates loopTime
+  }
+    
+}
+//Serial.print(client.remotePort());
+communicateServer();
+wdt_reset();
   switch(systemStatus[systemSubStatusCell]){    
     case systemNormal:  
       switch(systemStatus[systemStatusCell]){
